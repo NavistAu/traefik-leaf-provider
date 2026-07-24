@@ -1,0 +1,6 @@
+http:
+  middlewares:
+    testmw:
+      headers:
+        customResponseHeaders:
+          X-E2E-MW: "1"

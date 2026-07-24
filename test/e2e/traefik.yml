@@ -1,0 +1,35 @@
+# Static config for the "main" e2e traefik. CLI flags can't cleanly
+# express the map-of-list `routeMiddlewares` shape, so main's plugin
+# config lives here instead (see run.sh / README routeMiddlewares docs).
+api:
+  insecure: true
+
+entryPoints:
+  web:
+    address: ":80"
+
+experimental:
+  localPlugins:
+    leafprovider:
+      moduleName: github.com/jhogendorn/traefik-leaf-provider
+
+providers:
+  file:
+    filename: /etc/traefik/dynamic/mw.yml
+  plugin:
+    leafprovider:
+      pollInterval: 2s
+      requestTimeout: 2s
+      endpoints:
+        - name: leaf1
+          apiUrl: http://leaf:8080
+          webUrl: http://leaf:80
+          routeMiddlewares:
+            whoami:
+              - testmw@file
+            ghost:
+              - testmw@file
+        # Dead endpoint (TEST-NET-1): proves no-crash startup + isolation.
+        - name: deadleaf
+          apiUrl: http://192.0.2.1:9
+          webUrl: http://192.0.2.1:80

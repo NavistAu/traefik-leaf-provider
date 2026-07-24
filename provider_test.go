@@ -7,10 +7,14 @@
 package traefik_leaf_provider
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/traefik/genconf/dynamic"
@@ -145,6 +149,125 @@ func TestNewRejectsBadConfig(t *testing.T) {
 		if _, err := New(context.Background(), cfg, "test"); err == nil {
 			t.Fatalf("%s: expected error", name)
 		}
+	}
+}
+
+func TestRouteMiddlewaresOverride(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(sampleRawdata))
+	}))
+	defer srv.Close()
+
+	p := testProvider(t, []Endpoint{{
+		Name:        "argus",
+		APIURL:      srv.URL,
+		WebURL:      "http://10.0.0.8:80",
+		Middlewares: []string{"a@file"},
+		RouteMiddlewares: map[string][]string{
+			"status": {"b@file"},
+		},
+	}})
+
+	cfg, err := p.fetchEndpoint(context.Background(), 0)
+	if err != nil {
+		t.Fatalf("fetchEndpoint: %s", err)
+	}
+
+	if mw := cfg.Routers["status-argus"].Middlewares; len(mw) != 1 || mw[0] != "b@file" {
+		t.Fatalf("status-argus middlewares = %v, want [b@file]", mw)
+	}
+	if mw := cfg.Routers["grafana-argus"].Middlewares; len(mw) != 1 || mw[0] != "a@file" {
+		t.Fatalf("grafana-argus (no override) middlewares = %v, want endpoint default [a@file]", mw)
+	}
+}
+
+func TestRouteMiddlewaresEmptyListCarveOut(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(sampleRawdata))
+	}))
+	defer srv.Close()
+
+	p := testProvider(t, []Endpoint{{
+		Name:        "argus",
+		APIURL:      srv.URL,
+		WebURL:      "http://10.0.0.8:80",
+		Middlewares: []string{"a@file"},
+		RouteMiddlewares: map[string][]string{
+			"grafana": {},
+		},
+	}})
+
+	cfg, err := p.fetchEndpoint(context.Background(), 0)
+	if err != nil {
+		t.Fatalf("fetchEndpoint: %s", err)
+	}
+
+	if mw := cfg.Routers["grafana-argus"].Middlewares; len(mw) != 0 {
+		t.Fatalf("grafana-argus middlewares = %v, want none (empty-list carve-out)", mw)
+	}
+	if mw := cfg.Routers["status-argus"].Middlewares; len(mw) != 1 || mw[0] != "a@file" {
+		t.Fatalf("status-argus middlewares = %v, want endpoint default [a@file]", mw)
+	}
+}
+
+func TestRouteMiddlewaresFallbackToEndpointDefault(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(sampleRawdata))
+	}))
+	defer srv.Close()
+
+	p := testProvider(t, []Endpoint{{
+		Name:             "argus",
+		APIURL:           srv.URL,
+		WebURL:           "http://10.0.0.8:80",
+		Middlewares:      []string{"a@file"},
+		RouteMiddlewares: map[string][]string{}, // no entries at all: pure fallback
+	}})
+
+	cfg, err := p.fetchEndpoint(context.Background(), 0)
+	if err != nil {
+		t.Fatalf("fetchEndpoint: %s", err)
+	}
+
+	for _, name := range []string{"grafana-argus", "status-argus"} {
+		if mw := cfg.Routers[name].Middlewares; len(mw) != 1 || mw[0] != "a@file" {
+			t.Fatalf("%s middlewares = %v, want endpoint default [a@file]", name, mw)
+		}
+	}
+}
+
+func TestUnmatchedRouteMiddlewaresKeyLoggedOnce(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(sampleRawdata))
+	}))
+	defer srv.Close()
+
+	p := testProvider(t, []Endpoint{{
+		Name:   "argus",
+		APIURL: srv.URL,
+		WebURL: "http://10.0.0.8:80",
+		RouteMiddlewares: map[string][]string{
+			"ghost": {"a@file"},
+		},
+	}})
+
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+
+	if _, err := p.fetchEndpoint(context.Background(), 0); err != nil {
+		t.Fatalf("fetchEndpoint (1st poll): %s", err)
+	}
+	if _, err := p.fetchEndpoint(context.Background(), 0); err != nil {
+		t.Fatalf("fetchEndpoint (2nd poll): %s", err)
+	}
+
+	const marker = "routeMiddlewares keys matching no leaf router"
+	if got := strings.Count(buf.String(), marker); got != 1 {
+		t.Fatalf("unmatched-key log line appeared %d times, want 1: log = %q", got, buf.String())
+	}
+	if !strings.Contains(buf.String(), "ghost") {
+		t.Fatalf("log output missing unmatched key %q: %q", "ghost", buf.String())
 	}
 }
 

@@ -51,6 +51,10 @@ providers:
           webUrl: http://10.0.0.8:80
           middlewares:
             - authentik-forwardauth@file
+          routeMiddlewares:
+            grafana-leaf: []
+            status-leaf:
+              - authentik-forwardauth@file
 ```
 
 Install as a local plugin: the repo (including `vendor/`) mounted at
@@ -61,8 +65,32 @@ needed at any point, including startup.
 Emitted naming: leaf router `grafana@docker` on endpoint `argus`
 becomes router `grafana-argus` backed by service `argus-leaf`.
 `middlewares` are attached to every router emitted for that endpoint
-(this is where an edge concern like forward-auth gets applied to
-aggregated routes).
+by default — this is where an edge concern like forward-auth gets
+applied to aggregated routes.
+
+`routeMiddlewares` overrides `middlewares` per route. Keys are the
+leaf router's **base name**: its rawdata key with the `@provider`
+suffix stripped (e.g. rawdata key `grafana-leaf@docker` → key
+`grafana-leaf`, the same base name used to build the emitted router
+name `grafana-leaf-argus`). A router whose base name has an entry
+gets that list *instead of* `middlewares` — a **replacement, not a
+merge**. An entry that is an explicit empty list (`[]`) means "no
+middlewares for this route" — the carve-out for exempting one route
+(e.g. grafana) from an otherwise-gated endpoint. A router with no
+matching key falls back to the endpoint-level `middlewares` (v1
+behavior, unchanged).
+
+Because a typo'd key silently leaves that route ungated, each
+successful poll of an endpoint checks its `routeMiddlewares` keys
+against that poll's live leaf routers. Any key matching none of them
+is logged:
+
+```
+leaf-provider <name>: endpoint "argus": routeMiddlewares keys matching no leaf router: [staus-leaf]
+```
+
+This logs once when the set of unmatched keys changes, not on every
+poll — check logs after adding or renaming a `routeMiddlewares` key.
 
 ## Tests
 

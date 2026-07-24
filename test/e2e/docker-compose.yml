@@ -1,27 +1,20 @@
 # E2E: main traefik loads this repo as a LOCAL plugin (under Yaegi —
 # the only runtime whose verdict counts), aggregates from one live leaf
-# and one dead endpoint, and must still start and route.
+# and one dead endpoint, and must still start and route. main's plugin
+# config (incl. routeMiddlewares) is a mounted static file — see
+# traefik.yml — because CLI flags can't cleanly express a map of lists.
 services:
   main:
     image: traefik:v3.7
     command:
-      - --api.insecure=true
-      - --entrypoints.web.address=:80
-      - --experimental.localPlugins.leafprovider.moduleName=github.com/jhogendorn/traefik-leaf-provider
-      - --providers.plugin.leafprovider.pollInterval=2s
-      - --providers.plugin.leafprovider.requestTimeout=2s
-      - --providers.plugin.leafprovider.endpoints[0].name=leaf1
-      - --providers.plugin.leafprovider.endpoints[0].apiUrl=http://leaf:8080
-      - --providers.plugin.leafprovider.endpoints[0].webUrl=http://leaf:80
-      # Dead endpoint (TEST-NET-1): proves no-crash startup + isolation.
-      - --providers.plugin.leafprovider.endpoints[1].name=deadleaf
-      - --providers.plugin.leafprovider.endpoints[1].apiUrl=http://192.0.2.1:9
-      - --providers.plugin.leafprovider.endpoints[1].webUrl=http://192.0.2.1:80
+      - --configFile=/etc/traefik/traefik.yml
     ports:
       - "127.0.0.1:18080:80"
       - "127.0.0.1:18081:8080"
     volumes:
       - ../..:/plugins-local/src/github.com/jhogendorn/traefik-leaf-provider:ro
+      - ./traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./dynamic:/etc/traefik/dynamic:ro
 
   leaf:
     image: traefik:v3.7
@@ -40,3 +33,14 @@ services:
       traefik.http.routers.whoami.rule: Host(`whoami.test`)
       traefik.http.routers.whoami.entrypoints: web
       traefik.http.services.whoami.loadbalancer.server.port: "80"
+
+  # Second leaf router with no routeMiddlewares entry: proves override
+  # is per-route, not endpoint-wide (endpoint has no `middlewares`
+  # default here, so this route must come through with none attached).
+  whoami2:
+    image: traefik/whoami
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.whoami2.rule: Host(`whoami2.test`)
+      traefik.http.routers.whoami2.entrypoints: web
+      traefik.http.services.whoami2.loadbalancer.server.port: "80"

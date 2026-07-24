@@ -29,6 +29,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -50,6 +51,14 @@ type Endpoint struct {
 	// endpoint, referenced with their full provider suffix, e.g.
 	// "authentik-forwardauth@file". Optional.
 	Middlewares []string `json:"middlewares" yaml:"middlewares"`
+	// RouteMiddlewares overrides Middlewares per router, keyed by the
+	// leaf router's base name (rawdata key with its "@provider" suffix
+	// stripped, e.g. "grafana-leaf" for rawdata key
+	// "grafana-leaf@docker" — the same base name used to build the
+	// emitted router name). A present key REPLACES Middlewares for that
+	// router, including an explicitly-empty list (no middlewares). A
+	// router with no key here falls back to Middlewares. Optional.
+	RouteMiddlewares map[string][]string `json:"routeMiddlewares" yaml:"routeMiddlewares"`
 }
 
 // Config is the plugin configuration.
@@ -57,7 +66,7 @@ type Config struct {
 	// PollInterval between refresh cycles. Default "5s".
 	PollInterval string `json:"pollInterval" yaml:"pollInterval"`
 	// RequestTimeout for each leaf API call. Default "3s".
-	RequestTimeout string `json:"requestTimeout" yaml:"requestTimeout"`
+	RequestTimeout string     `json:"requestTimeout" yaml:"requestTimeout"`
 	Endpoints      []Endpoint `json:"endpoints" yaml:"endpoints"`
 }
 
@@ -78,6 +87,12 @@ type Provider struct {
 	// (stale beats blank: the routes usually still work, and blanking
 	// them would hard-404 the estate on a transient API hiccup).
 	lastGood []*dynamic.HTTPConfiguration
+
+	// lastUnmatched holds, per endpoint index, the sorted set of
+	// routeMiddlewares keys that matched no leaf router as of the last
+	// successful poll — so the "typo'd gate" warning logs on change,
+	// not on every poll.
+	lastUnmatched [][]string
 
 	cancel context.CancelFunc
 	done   chan struct{}
@@ -112,12 +127,13 @@ func New(ctx context.Context, config *Config, name string) (*Provider, error) {
 	}
 
 	return &Provider{
-		name:         name,
-		pollInterval: poll,
-		client:       &http.Client{Timeout: reqTimeout},
-		endpoints:    config.Endpoints,
-		lastGood:     make([]*dynamic.HTTPConfiguration, len(config.Endpoints)),
-		done:         make(chan struct{}),
+		name:          name,
+		pollInterval:  poll,
+		client:        &http.Client{Timeout: reqTimeout},
+		endpoints:     config.Endpoints,
+		lastGood:      make([]*dynamic.HTTPConfiguration, len(config.Endpoints)),
+		lastUnmatched: make([][]string, len(config.Endpoints)),
+		done:          make(chan struct{}),
 	}, nil
 }
 
@@ -235,16 +251,24 @@ func (p *Provider) fetchEndpoint(ctx context.Context, idx int) (*dynamic.HTTPCon
 	}
 
 	serviceName := e.Name + "-leaf"
+	matched := map[string]bool{}
 	for key, r := range raw.Routers {
 		if strings.HasSuffix(key, "@internal") || r == nil || r.Rule == "" {
 			continue
 		}
-		name := strings.Split(key, "@")[0] + "-" + e.Name
-		out.Routers[name] = &dynamic.Router{
+		base := strings.Split(key, "@")[0]
+		matched[base] = true
+
+		mw := e.Middlewares
+		if v, ok := e.RouteMiddlewares[base]; ok {
+			mw = v
+		}
+
+		out.Routers[base+"-"+e.Name] = &dynamic.Router{
 			Rule:        r.Rule,
 			Priority:    r.Priority,
 			Service:     serviceName,
-			Middlewares: e.Middlewares,
+			Middlewares: mw,
 		}
 	}
 
@@ -256,5 +280,34 @@ func (p *Provider) fetchEndpoint(ctx context.Context, idx int) (*dynamic.HTTPCon
 		}
 	}
 
+	// Security-relevant: a routeMiddlewares key matching no live leaf
+	// router is a typo'd gate — that route would silently serve
+	// ungated. Log on change, not every poll (see lastUnmatched).
+	unmatched := []string{}
+	for k := range e.RouteMiddlewares {
+		if !matched[k] {
+			unmatched = append(unmatched, k)
+		}
+	}
+	sort.Strings(unmatched)
+	if len(unmatched) > 0 && !sameStrings(unmatched, p.lastUnmatched[idx]) {
+		log.Printf("leaf-provider %s: endpoint %q: routeMiddlewares keys matching no leaf router: %v", p.name, e.Name, unmatched)
+	}
+	p.lastUnmatched[idx] = unmatched
+
 	return out, nil
+}
+
+// sameStrings reports whether two (already-sorted) slices hold the same
+// elements in the same order. Index-based loop — see package comment.
+func sameStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := 0; i < len(a); i++ {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
