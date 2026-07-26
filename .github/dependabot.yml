@@ -1,0 +1,30 @@
+version: 2
+updates:
+  # Go dependencies. This repository vendors, so an accepted update must be
+  # followed by `go mod vendor`; CI's vendor-drift job fails the PR otherwise.
+  - package-ecosystem: gomod
+    directory: "/"
+    schedule:
+      interval: weekly
+    target-branch: develop
+    labels: ["dependencies"]
+    commit-message:
+      prefix: "deps"
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    target-branch: develop
+    labels: ["dependencies", "ci"]
+    commit-message:
+      prefix: "ci"
+
+  # The E2E harness pins traefik:v3.7 and traefik/whoami. Keeping the tested
+  # Traefik version current is the point of watching this directory.
+  - package-ecosystem: docker-compose
+    directory: "/test/e2e"
+    schedule:
+      interval: weekly
+    target-branch: develop
+    labels: ["dependencies", "e2e"]

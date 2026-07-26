@@ -12,7 +12,7 @@ services:
       - "127.0.0.1:18080:80"
       - "127.0.0.1:18081:8080"
     volumes:
-      - ../..:/plugins-local/src/github.com/jhogendorn/traefik-leaf-provider:ro
+      - ../..:/plugins-local/src/github.com/NavistAu/traefik-leaf-provider:ro
       - ./traefik.yml:/etc/traefik/traefik.yml:ro
       - ./dynamic:/etc/traefik/dynamic:ro
 

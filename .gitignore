@@ -1,0 +1,12 @@
+# Build and test output.
+/dist/
+*.tar.gz
+coverage.out
+
+# Editor and OS noise.
+.DS_Store
+*.swp
+
+# NOTE: vendor/ is deliberately NOT ignored. The Traefik Plugin Catalog
+# requires vendored dependencies to be committed, and the local-plugin
+# install path loads them directly from the repository.

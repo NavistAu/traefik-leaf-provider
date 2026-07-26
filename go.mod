@@ -1,4 +1,4 @@
-module github.com/jhogendorn/traefik-leaf-provider
+module github.com/NavistAu/traefik-leaf-provider
 
 go 1.22
 

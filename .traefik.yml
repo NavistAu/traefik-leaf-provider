@@ -1,6 +1,6 @@
 displayName: Leaf Provider
 type: provider
-import: github.com/jhogendorn/traefik-leaf-provider
+import: github.com/NavistAu/traefik-leaf-provider
 summary: >-
   Aggregates Host rules from downstream "leaf" traefik instances and
   forwards matched traffic to each leaf's web entrypoint (two-hop).

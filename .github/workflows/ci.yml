@@ -1,0 +1,119 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+permissions:
+  contents: read
+
+jobs:
+  go-version:
+    name: Read Go version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.parse.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse Go version from mise.toml
+        id: parse
+        run: echo "version=$(grep '^go' mise.toml | sed 's/.*"\(.*\)"/\1/')" >> "$GITHUB_OUTPUT"
+
+  lint:
+    name: Lint
+    needs: go-version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ needs.go-version.outputs.version }}
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l . | grep -v '^vendor/' || true)
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt-clean:"
+            echo "$unformatted"
+            exit 1
+          fi
+      - name: go vet
+        run: go vet ./...
+
+  vendor:
+    name: Vendor is in sync
+    needs: go-version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ needs.go-version.outputs.version }}
+      # The Plugin Catalog and the local-plugin install path both load
+      # dependencies straight out of vendor/, so drift here ships broken.
+      - name: Re-vendor and diff
+        run: |
+          go mod tidy
+          go mod vendor
+          git diff --exit-code go.mod go.sum vendor/ \
+            || { echo "vendor/ is stale — run 'go mod tidy && go mod vendor' and commit."; exit 1; }
+
+  manifest:
+    name: Plugin manifest is valid
+    needs: go-version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ needs.go-version.outputs.version }}
+      # Catalog discovery fails silently-ish (a bot-filed issue, days later)
+      # if these drift, so assert them on every change instead.
+      - name: Check .traefik.yml against go.mod
+        run: |
+          python3 - <<'PY'
+          import re, sys, pathlib
+          manifest = pathlib.Path(".traefik.yml").read_text()
+          gomod = pathlib.Path("go.mod").read_text()
+
+          module = re.search(r'^module\s+(\S+)', gomod, re.M).group(1)
+          imp = re.search(r'^import:\s*(\S+)', manifest, re.M)
+          if not imp:
+              sys.exit(".traefik.yml has no 'import:' field")
+          if imp.group(1) != module:
+              sys.exit(f".traefik.yml import {imp.group(1)!r} != go.mod module {module!r}")
+
+          for field in ("displayName", "type", "summary", "testData"):
+              if not re.search(rf'^{field}:', manifest, re.M):
+                  sys.exit(f".traefik.yml is missing required field {field!r}")
+          print(f"manifest OK: {module}")
+          PY
+
+  test:
+    name: Unit tests
+    needs: go-version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ needs.go-version.outputs.version }}
+      - name: go test
+        run: go test -race -v ./...
+
+  e2e:
+    name: E2E (Traefik + Yaegi)
+    needs: go-version
+    runs-on: ubuntu-latest
+    # The compiled unit suite cannot catch Yaegi/compiler divergence, which
+    # is where this plugin's real bugs have lived. This job is the gate that
+    # actually counts; it must run on every PR, not only on main.
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run E2E suite
+        run: ./test/e2e/run.sh
+      - name: Dump Traefik logs on failure
+        if: failure()
+        run: docker compose -f test/e2e/docker-compose.yml logs || true

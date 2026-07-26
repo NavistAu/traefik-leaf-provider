@@ -11,7 +11,7 @@ entryPoints:
 experimental:
   localPlugins:
     leafprovider:
-      moduleName: github.com/jhogendorn/traefik-leaf-provider
+      moduleName: github.com/NavistAu/traefik-leaf-provider
 
 providers:
   file:

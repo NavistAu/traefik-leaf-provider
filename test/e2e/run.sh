@@ -16,6 +16,23 @@ docker compose up -d --quiet-pull
 
 fail() { echo "FAIL: $1"; docker compose logs main | tail -30; exit 1; }
 
+# Log assertions must retry. A dead endpoint only logs after its
+# requestTimeout elapses (2s here), and endpoints are polled
+# sequentially, so a single grep races the poll loop and fails
+# spuriously. Retry for ~30s before believing the line is absent.
+wait_for_log() {
+  local pattern="$1" extra="${2:-}" i
+  for i in $(seq 1 30); do
+    if [ -n "$extra" ]; then
+      docker compose logs main 2>&1 | grep "$pattern" | grep -q "$extra" && return 0
+    else
+      docker compose logs main 2>&1 | grep -q "$pattern" && return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
 # (1) main must come up and expose its API despite deadleaf.
 for i in $(seq 1 30); do
   curl -sf -m 2 http://127.0.0.1:18081/api/version >/dev/null && break
@@ -44,7 +61,7 @@ echo "$body" | grep -q 'Hostname:' || fail "whoami did not answer through the tw
 echo "$routers" | grep '^whoami-leaf1@' | grep -q '@plugin-leafprovider' || fail "router not in plugin provider namespace: $(echo "$routers" | grep '^whoami-leaf1@')"
 
 # (5) main's log must show deadleaf isolated (logged, not fatal).
-docker compose logs main 2>&1 | grep -q 'endpoint "deadleaf"' || fail "deadleaf error never logged (isolation path untested?)"
+wait_for_log 'endpoint "deadleaf"' || fail "deadleaf error never logged (isolation path untested?)"
 
 # (6) routeMiddlewares applied: whoami has an override -> testmw's
 # response header must be present on the two-hop response.
@@ -74,6 +91,6 @@ sys.exit(0 if ok else 1)
 
 # (9) the deliberately-unmatched routeMiddlewares key ("ghost") must be
 # logged as matching no leaf router.
-docker compose logs main 2>&1 | grep 'routeMiddlewares keys matching no leaf router' | grep -q 'ghost' || fail "unmatched routeMiddlewares key 'ghost' never logged"
+wait_for_log 'routeMiddlewares keys matching no leaf router' 'ghost' || fail "unmatched routeMiddlewares key 'ghost' never logged"
 
 echo "E2E PASS"
