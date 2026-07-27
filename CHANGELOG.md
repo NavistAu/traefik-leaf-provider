@@ -52,6 +52,11 @@ is the first tagged, published version, so everything below ships together.
 - Release automation on merge to `main`, driven by the `VERSION` file.
 - Contributor documentation: `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`,
   `SECURITY.md`, issue templates, and a pull request template.
+- A full user-facing README: defined terms, both installation methods, a
+  complete configuration reference, error and log message tables, and
+  troubleshooting. The reference and procedural sections follow ASD-STE100
+  simplified technical English; the introductory and design sections keep an
+  ordinary voice. `CONTRIBUTING.md` documents where the boundary falls.
 
 ### Fixed
 

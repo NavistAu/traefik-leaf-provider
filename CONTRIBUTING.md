@@ -119,6 +119,36 @@ Treat any change to which middlewares attach to which routes as at least a
 minor bump, and say so explicitly in the changelog. Operators depend on that
 mapping for access control.
 
+## Documentation style
+
+`README.md` deliberately mixes two registers. Match whichever one you are
+editing.
+
+**Reference and procedural sections use [ASD-STE100][ste] simplified technical
+English.** This covers Terms, Requirements, Installation, Configuration, the
+naming and middleware sections, failure behaviour, log messages, and
+troubleshooting. The rules that matter in practice:
+
+- One idea per sentence. Twenty words for an instruction, twenty-five for
+  description.
+- Active voice, present tense, simple verbs.
+- One term for one thing, every time. The Terms table is the authority — if you
+  need a new term, add it there.
+- Start a warning with the command, not the explanation.
+- Keep noun clusters to three words or fewer.
+
+**Argumentative and introductory sections keep an ordinary voice.** This covers
+the opening, "When to use this plugin", "Design constraints", and the framing
+around the test suites. These sections persuade rather than instruct, and
+flattening them costs more than it gains.
+
+The split is not arbitrary. A reader configuring the plugin at 2am wants
+unambiguous declaratives, and many of them are not reading in their first
+language. A reader deciding whether to adopt it, or about to "simplify" the
+poll loop, needs to understand *why*, which takes real prose.
+
+[ste]: https://www.asd-ste100.org/
+
 ## Code style
 
 Match the surrounding code. Two conventions are load-bearing rather than

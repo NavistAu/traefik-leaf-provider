@@ -4,8 +4,8 @@ contact_links:
     url: https://github.com/NavistAu/traefik-leaf-provider/security/advisories/new
     about: Report a vulnerability privately. Do not open a public issue.
   - name: Question or usage help
-    url: https://github.com/NavistAu/traefik-leaf-provider/discussions
-    about: Ask about configuration, deployment, or the two-hop model.
+    url: https://github.com/NavistAu/traefik-leaf-provider/issues
+    about: Search the existing issues first, then open a bug report if none match.
   - name: Traefik itself
     url: https://community.traefik.io/
     about: For questions about Traefik that are not specific to this plugin.

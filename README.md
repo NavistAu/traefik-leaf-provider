@@ -4,12 +4,22 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/NavistAu/traefik-leaf-provider.svg)](https://pkg.go.dev/github.com/NavistAu/traefik-leaf-provider)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-A Traefik provider plugin. It reads the router rules from one or more
-downstream Traefik instances. It then makes the same rules available on the
-Traefik instance at your edge.
+A Traefik provider plugin that aggregates HTTP router rules from downstream
+"leaf" Traefik instances, two-hop style: the main instance matches the leaf's
+Host rules and forwards matched traffic to the leaf's web entrypoint; the leaf
+does its own final routing.
 
-This lets one edge instance serve the routes of many downstream instances. You
-do not have to copy each route by hand.
+One edge instance — the one holding your certificates, your forward-auth, your
+rate limits — serves the routes of an entire estate of downstream Traefik
+instances, and you never write a route on the edge by hand.
+
+Purpose-built after evaluating the existing aggregator plugins
+(im-kulikov/traefik-provider, MadddinTribleD/traefikaggregator,
+Beanow/traefik-plugin-rawdata) and finding each unmaintained or broken in ways
+that matter for a production edge: startup crashes on unreachable endpoints,
+multi-endpoint handling bugs, silent route breakage. This is the ~230-line
+subset that does only what is needed, with those failure modes as explicit
+[design constraints](#design-constraints-why-the-code-looks-like-it-does).
 
 ## Contents
 
@@ -24,7 +34,7 @@ do not have to copy each route by hand.
 - [Behaviour when a leaf instance fails](#behaviour-when-a-leaf-instance-fails)
 - [Log messages](#log-messages)
 - [Troubleshooting](#troubleshooting)
-- [Design constraints](#design-constraints)
+- [Design constraints](#design-constraints-why-the-code-looks-like-it-does)
 - [Tests](#tests)
 - [Contributing](#contributing)
 - [Security](#security)
@@ -84,25 +94,23 @@ instead. That service points at the web entrypoint of the leaf instance.
 
 ## When to use this plugin
 
-Use this plugin when all of these are true.
+The shape this fits: an edge Traefik that owns your certificates and your auth,
+plus one or more downstream Traefik instances whose *backends* the edge cannot
+reach — separate hosts, separate container networks, a DMZ, a tailnet. Services
+come and go downstream, and you would rather not write each route twice.
 
-- You have more than one Traefik instance.
-- One instance is at your edge, and it holds your certificates and your
-  authentication middlewares.
-- The other instances are on networks that the edge can reach, but their
-  backends are not.
-- You do not want to write a route on the edge each time a service starts
-  downstream.
+Two hops is the price. Every request traverses both instances, and the leaf
+sees the traffic. If that is unacceptable, you want a flat network and one
+Traefik, not this.
 
-Do not use this plugin in these cases.
+Do not use it if:
 
-- **You do not control a leaf instance.** The plugin copies router rules from
-  each endpoint you configure. Any person who can write a router rule on a leaf
-  instance can make a route on your edge. Configure only leaf instances that
-  you control.
-- **You want one hop, not two.** Every request goes through both instances.
-  This adds a proxy hop, and the leaf instance sees the traffic.
-- **You have one Traefik instance.** Use the standard providers instead.
+- **You do not control a leaf.** The plugin copies router rules from every
+  endpoint you configure. Anyone who can write a router rule on a leaf can
+  create a route on your edge — that is what aggregation *means*. Configure
+  only leaves you control.
+- **You have one Traefik instance.** The standard providers already do this,
+  better. This plugin has nothing to offer you.
 
 ## Requirements
 
@@ -367,9 +375,10 @@ affect another.
 | A poll succeeds again | The plugin replaces the last good configuration with the new one. |
 | A route disappears from a leaf instance | The plugin removes the emitted router at the next successful poll of that endpoint. |
 
-The rule behind this table is simple. **Stale routes are better than no
-routes.** A stale route usually still works, because the backend is still
-there. An empty configuration returns HTTP 404 for every aggregated host.
+The rule behind that table: **stale beats blank.** A stale route usually still
+works — the backend is still there, and the leaf still knows how to reach it.
+An empty configuration hard-404s every aggregated host on the estate, which is
+a far worse outcome than serving a route that has moved on.
 
 ## Log messages
 
@@ -479,39 +488,30 @@ The endpoint fails some polls and succeeds at others. Look for `serving last
 known good` lines in the log. Raise `requestTimeout`, or find why the leaf
 instance API is slow.
 
-## Design constraints
+## Design constraints (why the code looks like it does)
 
-These constraints explain why the code has its present shape. Each one records
-a failure in an earlier plugin that this one replaced. Read
-[`provider.go`](provider.go) before you change any of them.
+Each of these broke one of the prior candidates. They are not stylistic
+preferences, and "cleaning them up" is how this plugin becomes the fourth
+broken aggregator. Read [`provider.go`](provider.go)'s package comment before
+touching any of them.
 
-- **`Init()` makes no network call.** Traefik treats a provider initialisation
-  failure as fatal. A probe in `Init()` would turn "one leaf instance is down
-  during a restart" into "every route in the estate is down".
-- **The plugin reads endpoints one after the other.** It isolates errors per
-  endpoint, and it keeps a last good configuration per endpoint. One dead leaf
-  instance must never block or blank another. Concurrency is where the earlier
-  plugins had their endpoint bugs.
-- **The plugin never copies a backend from a leaf instance.** Leaf backend URLs
-  are container-network addresses. The main instance cannot reach them. To
-  interpret the internals of a proxy, and then to route around it, is the
-  design error that this plugin exists to avoid.
-- **The code uses idioms that are safe under Yaegi.** Traefik interprets
-  plugins with [Yaegi](https://github.com/traefik/yaegi). Yaegi is not the Go
-  compiler, and the two have disagreed about this code twice.
-  - Loops over endpoints use an explicit index. The capture of a loop variable
-    behaves differently under Yaegi. That difference shipped as a bug in an
-    earlier plugin.
-  - `refresh` sends to the provider channel directly. A `select` case that
-    sends an interpreted value panics inside `reflect.Select`.
-
-This plugin replaced three earlier aggregator plugins:
-`im-kulikov/traefik-provider`, `MadddinTribleD/traefikaggregator`, and
-`Beanow/traefik-plugin-rawdata`. Each one was unmaintained, or failed in a way
-that matters at a production edge: a crash at startup when an endpoint was
-unreachable, incorrect handling of more than one endpoint, or silent loss of
-routes. This plugin is the small subset that does only what is needed, and it
-takes those failures as its design constraints.
+- **No network I/O in `Init()`** — provider init failure is fatal to Traefik; a
+  blocking probe there turns "one leaf down during a restart" into "every route
+  in the estate down".
+- **Sequential polling, per-endpoint error isolation, per-endpoint
+  last-known-good** — one dead leaf never blocks or blanks another; transient
+  API failures serve stale rather than empty. Concurrency is precisely where
+  the prior candidates' endpoint bugs lived.
+- **Backends are never copied from leaves** — leaf backend URLs are
+  container-network addresses, unreachable from the aggregator. Interpreting a
+  proxy's internals in order to route around it is the design error this plugin
+  exists to avoid. One service per leaf, pointing at its web entrypoint.
+- **Yaegi-safe idioms** — this runs under Traefik's Go interpreter, not the
+  compiler. Index-based loops, because loop-variable capture diverges and
+  shipped exactly that bug in a prior plugin. Plain channel sends into the
+  provider channel, because a select-case send of an interpreted value panics
+  in `reflect.Select` — found empirically, in e2e, on 2026-07-23. Compiled unit
+  tests are necessary but nowhere near sufficient.
 
 ## Tests
 
@@ -520,13 +520,14 @@ go test ./...          # compiled unit tests
 ./test/e2e/run.sh      # real Traefik, real Yaegi
 ```
 
-The compiled unit tests cover the transform logic and the merge logic. They are
-fast. They are also insufficient by their nature, because Traefik does not use
-the Go compiler to run this plugin.
+The compiled suite covers the transform and merge logic, and it is fast. It is
+also incomplete by nature: Traefik does not use the Go compiler to run this
+plugin, so a green `go test` proves remarkably little about whether the thing
+actually works.
 
-**Run the E2E suite before you trust any change.** It starts a real Traefik
-instance that loads this repository as a local plugin. It uses one live leaf
-instance and one dead endpoint. It then asserts these things.
+**`test/e2e/run.sh` is the gate that counts.** It starts a real Traefik
+instance that loads this repository as a local plugin, against one live leaf
+instance and one deliberately dead endpoint. It asserts these things.
 
 - Startup survives the dead endpoint.
 - Aggregation works, and the emitted names are correct.
