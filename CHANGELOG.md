@@ -38,6 +38,13 @@ zero-trust estate rather than only on a trusted network.
   including a negative control that proves the gate rejects an endpoint with no
   client keypair.
 
+### Documentation
+
+- The README states the zero-trust position up front, and links the CoreDNS
+  consumer to [coredns-traefik](https://github.com/jhogendorn/coredns-traefik).
+- Corrected the stale "~230-line" claim. The plugin is ~300 lines of Go as of
+  this release, up from ~170 at 1.0.0.
+
 ### Changed
 
 - `serversTransport` on an emitted service was previously always empty, so

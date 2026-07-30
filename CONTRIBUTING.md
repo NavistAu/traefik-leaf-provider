@@ -8,8 +8,9 @@ vulnerability, follow [`SECURITY.md`](SECURITY.md) instead of opening an issue.
 
 ## Before you start
 
-This plugin is deliberately small — roughly 230 lines that aggregate router
-rules and forward to a leaf's web entrypoint. It replaced three larger
+This plugin is deliberately small — roughly 300 lines of Go, under nearly as
+many lines of comment, that aggregate router rules and forward to a leaf's web
+entrypoint. It replaced three larger
 aggregator plugins that each failed in a way that took down a production edge.
 The constraints in [`provider.go`](provider.go)'s package comment are not
 stylistic preferences; each one records a specific outage. Read them before you

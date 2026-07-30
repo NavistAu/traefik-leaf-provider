@@ -12,10 +12,15 @@ One edge instance — the one holding your certificates, your forward-auth, your
 entire estate of downstream Traefik instances, and you never write a route on the edge by hand. One routing table, one
 API, every hostname in the estate.
 
+Both hops are yours to secure. Each endpoint takes a private CA and a client keypair, and they apply to the forwarded
+traffic *and* to the plugin's own poll of the leaf's API — the connection Traefik itself has no say over, because the
+plugin makes it. So a leaf that refuses anything without a client certificate stays that way, and aggregating it does
+not mean punching a hole for an unauthenticated caller. See [TLS](#tls).
+
 Purpose-built after evaluating the existing aggregator plugins (im-kulikov/traefik-provider,
 MadddinTribleD/traefikaggregator, Beanow/traefik-plugin-rawdata) and finding each unmaintained or broken in ways that
 matter for a production edge: startup crashes on unreachable endpoints, multi-endpoint handling bugs, silent route
-breakage. This is the ~230-line subset that does only what is needed, with those failure modes as explicit
+breakage. This is the ~300-line subset that does only what is needed, with those failure modes as explicit
 [design constraints](#design-constraints-why-the-code-looks-like-it-does).
 
 ## Contents
@@ -81,7 +86,9 @@ endpoint instead. That service points at the web entrypoint of the leaf instance
 The usefulness of this plugin is in being able to have a central fronting traefik instance that manages auth middleware,
 certificates, etc, while still having downstream traefik instances on various platforms as suits your architecture. As
 well as helping solve architectural constraints, it centralises your routing information which helps it become a single
-source of truth you can pull into consumers like CoreDNS for dynamic dns registration.
+source of truth you can pull into consumers like
+[coredns-traefik](https://github.com/jhogendorn/coredns-traefik) — a CoreDNS plugin that generates CNAMEs from
+traefik http routers — for dynamic dns registration.
 
 For example, you might have a k8s cluster traefik, a few vm's with a set of docker compose services, maybe you use the
 proxmox pve plugin to get vm-level traefik configs, and your design colocates the traefik that does that onto the
@@ -630,7 +637,8 @@ not use the Go compiler to run this plugin, so a green `go test` proves remarkab
 actually works.
 
 **`test/e2e/run.sh` is the gate that counts.** It starts a real Traefik instance that loads this repository as a local
-plugin, against one live leaf instance and one deliberately dead endpoint. It asserts these things.
+plugin, against one live leaf instance, one deliberately dead endpoint, and an nginx gate that fronts a leaf API with
+`ssl_verify_client on`. It asserts these things.
 
 - Startup survives the dead endpoint.
 - Aggregation works, and the emitted names are correct.
@@ -638,8 +646,16 @@ plugin, against one live leaf instance and one deliberately dead endpoint. It as
 - The emitted routers have the correct provider namespace.
 - The plugin logs the dead endpoint and isolates it.
 - The four `routeMiddlewares` behaviours hold.
+- An endpoint aggregates through the mutual TLS gate.
+- The same gate rejects an endpoint that sends no client certificate.
+- The generated serversTransport resolves.
+- The plain routes still work next to all of it.
 
-You need Docker with the Compose plugin.
+The mutual TLS assertions are the reason this suite exists. The plugin builds its TLS client under the interpreter, and
+only a real handshake shows that it works.
+
+You need Docker with the Compose plugin. The suite makes its own certificates on the first run, in `test/e2e/certs/`.
+That directory is not in Git.
 
 ## Contributing
 
