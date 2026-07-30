@@ -125,6 +125,10 @@ jobs:
     name: Warm the Go module proxy
     needs: [gate, release]
     runs-on: ubuntu-latest
+    # proxy.golang.org cannot fetch a private module, so this would fail
+    # for the whole time the repository is private. Skip rather than go
+    # permanently red; the first release after going public warms it.
+    if: ${{ !github.event.repository.private }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5

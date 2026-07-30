@@ -114,7 +114,8 @@ To cut a release, open a PR from `develop` to `main` that:
 When that PR merges, `.github/workflows/release.yml` re-runs the unit and E2E
 suites, creates the tag `vX.Y.Z`, publishes a GitHub Release with a
 local-plugin tarball, and asks `proxy.golang.org` for the new version so the
-Plugin Catalog sees it on its next poll.
+Plugin Catalog sees it on its next poll. That last step is skipped while the
+repository is private, because the proxy cannot fetch a private module.
 
 Nothing is tagged from a local machine. Do not push tags.
 
