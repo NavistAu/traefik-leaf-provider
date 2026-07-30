@@ -33,7 +33,7 @@ jobs:
       tag: ${{ steps.decide.outputs.tag }}
       goVersion: ${{ steps.go.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # go.mod's `go` directive is a deliberately low language floor for
       # plugin compatibility. mise.toml holds the toolchain CI builds with.
@@ -78,7 +78,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ needs.gate.outputs.goVersion }}
@@ -94,7 +94,7 @@ jobs:
     outputs:
       tag: ${{ needs.gate.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # The install artifact for the local-plugin path: the plugin source
       # plus its vendored dependencies, laid out ready to unpack into
@@ -130,7 +130,7 @@ jobs:
     # permanently red; the first release after going public warms it.
     if: ${{ !github.event.repository.private }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ needs.gate.outputs.goVersion }}
