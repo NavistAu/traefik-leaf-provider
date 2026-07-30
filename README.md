@@ -278,6 +278,19 @@ The plugin copies the `rule` and the `priority` of each leaf router. It sets the
 **Keep your endpoint names short and distinct.** The endpoint name is part of every router name that comes from that
 endpoint.
 
+### Two endpoints that serve the same host
+
+The plugin gives each emitted router a unique name, because the endpoint name is part of it. It does **not** make the
+rules unique. Two leaf instances that both serve `Host(\`app.example.com\`)` give two routers with the same rule and the
+same priority. Traefik then picks one of them, and which one it picks is not defined.
+
+This matters most when two endpoints point at the same leaf instance, because then **every** rule collides.
+
+Do one of these:
+
+- Give each leaf instance its own host names. This is the usual answer.
+- Set a different `priority` on the leaf router that must win. The plugin copies the priority from the leaf instance.
+
 ### Routers that the plugin ignores
 
 The plugin does not emit a router in these cases.

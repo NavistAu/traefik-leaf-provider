@@ -38,7 +38,7 @@ providers:
         # executes under Yaegi, not just under the compiler.
         - name: mtlsleaf
           apiUrl: https://leafmtls:8443
-          webUrl: http://leaf:80
+          webUrl: http://leaf2:80
           tls:
             rootCAs:
               - /certs/ca.pem
@@ -50,7 +50,7 @@ providers:
         # endpoint above is not passing for some unrelated reason.
         - name: mtlsnocert
           apiUrl: https://leafmtls:8443
-          webUrl: http://leaf:80
+          webUrl: http://leaf2:80
           tls:
             rootCAs:
               - /certs/ca.pem

@@ -129,10 +129,10 @@ wait_for_log 'routeMiddlewares keys matching no leaf router' 'ghost' || fail "un
 # completed the mTLS handshake. Compiled tests cannot prove this.
 for i in $(seq 1 20); do
   raw3=$(curl -s -m 2 http://127.0.0.1:18081/api/rawdata || true)
-  printf '%s' "$raw3" | grep -q 'whoami-mtlsleaf@plugin-leafprovider' && break
+  printf '%s' "$raw3" | grep -q 'whoami3-mtlsleaf@plugin-leafprovider' && break
   [ "$i" = 20 ] && {
     echo "--- leafmtls log ---"; docker compose logs leafmtls | tail -20
-    fail "mtlsleaf never aggregated (hop-1 mTLS broken under Yaegi?)"
+    fail "mtlsleaf never aggregated whoami3 (hop-1 mTLS broken under Yaegi?)"
   }
   sleep 2
 done
@@ -141,7 +141,7 @@ echo "mTLS endpoint aggregated"
 # (11) Negative control. mtlsnocert trusts the same CA but presents no
 # client keypair, so the gate must reject it. If this endpoint DID
 # aggregate, assertion (10) would prove nothing about client certs.
-if printf '%s' "$raw3" | grep -q 'whoami-mtlsnocert@plugin-leafprovider'; then
+if printf '%s' "$raw3" | grep -q 'whoami3-mtlsnocert@plugin-leafprovider'; then
   fail "mtlsnocert aggregated without a client certificate — mTLS is not being enforced"
 fi
 wait_for_log 'endpoint "mtlsnocert"' || fail "mtlsnocert failure never logged (isolation path untested?)"
@@ -187,5 +187,12 @@ echo "generated serversTransport referenced and resolved"
 # two-hop route still works with three TLS-configured siblings around it.
 body2=$(curl -sf -m 5 -H 'Host: whoami.test' http://127.0.0.1:18080/) || fail "two-hop route broke after TLS endpoints were added"
 echo "$body2" | grep -q 'Hostname:' || fail "whoami did not answer after TLS endpoints were added"
+
+# And the mTLS endpoint's own route must two-hop for real, not merely
+# appear in rawdata: main -> leaf2 -> whoami3, on a route learned
+# entirely through the mTLS-gated poll.
+body3=$(curl -sf -m 5 -H 'Host: whoami3.test' http://127.0.0.1:18080/) || fail "two-hop through the mTLS-learned route failed"
+echo "$body3" | grep -q 'Hostname:' || fail "whoami3 did not answer through the mTLS-learned route"
+echo "mTLS-learned route serves end to end"
 
 echo "E2E PASS"

@@ -38,6 +38,14 @@ zero-trust estate rather than only on a trusted network.
   including a negative control that proves the gate rejects an endpoint with no
   client keypair.
 
+### Fixed
+
+- The E2E suite pointed two endpoints at the same leaf, so `whoami-leaf1` and
+  `whoami-mtlsleaf` carried identical `Host` rules and Traefik chose between
+  them arbitrarily. That made the `routeMiddlewares` assertions a coin toss;
+  CI lost the toss on the first run, after three clean local runs. The mTLS
+  gate now fronts its own leaf, partitioned by a docker label constraint.
+
 ### Documentation
 
 - The README states the zero-trust position up front, and links the CoreDNS
