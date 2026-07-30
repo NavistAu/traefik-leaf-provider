@@ -33,7 +33,7 @@ jobs:
       tag: ${{ steps.decide.outputs.tag }}
       goVersion: ${{ steps.go.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # go.mod's `go` directive is a deliberately low language floor for
       # plugin compatibility. mise.toml holds the toolchain CI builds with.
@@ -78,8 +78,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version: ${{ needs.gate.outputs.goVersion }}
       - name: Unit tests
@@ -94,7 +94,7 @@ jobs:
     outputs:
       tag: ${{ needs.gate.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # The install artifact for the local-plugin path: the plugin source
       # plus its vendored dependencies, laid out ready to unpack into
@@ -110,7 +110,7 @@ jobs:
           cat "traefik-leaf-provider-${TAG}.tar.gz.sha256"
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           # Triggered by a push to main rather than a tag, so name the tag
           # explicitly; the action creates it on this commit.
@@ -130,8 +130,8 @@ jobs:
     # permanently red; the first release after going public warms it.
     if: ${{ !github.event.repository.private }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version: ${{ needs.gate.outputs.goVersion }}
       # Catalog discovery reads this plugin from proxy.golang.org, not from

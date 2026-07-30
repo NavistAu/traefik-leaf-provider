@@ -11,6 +11,9 @@ updates:
     commit-message:
       prefix: "deps"
 
+  # Grouped: action bumps all edit the same two workflow files, so separate
+  # PRs conflict with each other and each needs a rebase after the first
+  # merge. One PR per week for all of them instead.
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
@@ -19,6 +22,9 @@ updates:
     labels: ["dependencies", "ci"]
     commit-message:
       prefix: "ci"
+    groups:
+      github-actions:
+        patterns: ["*"]
 
   # The E2E harness pins traefik:v3.7 and traefik/whoami. Keeping the tested
   # Traefik version current is the point of watching this directory.
