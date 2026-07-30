@@ -22,8 +22,8 @@ import (
 
 const sampleRawdata = `{
   "routers": {
-    "grafana@docker":  {"rule": "Host(` + "`grafana.29c.sh`" + `)", "service": "grafana", "status": "enabled", "using": ["web"]},
-    "status@docker":   {"rule": "Host(` + "`status.29c.sh`" + `)", "priority": 20, "service": "status"},
+    "grafana@docker":  {"rule": "Host(` + "`grafana.example.com`" + `)", "service": "grafana", "status": "enabled", "using": ["web"]},
+    "status@docker":   {"rule": "Host(` + "`status.example.com`" + `)", "priority": 20, "service": "status"},
     "api@internal":    {"rule": "PathPrefix(` + "`/api`" + `)", "service": "api@internal"},
     "phantom@docker":  {"service": "phantom"}
   },
@@ -54,10 +54,10 @@ func TestFetchEndpointTransform(t *testing.T) {
 	defer srv.Close()
 
 	p := testProvider(t, []Endpoint{{
-		Name:        "argus",
+		Name:        "alpha",
 		APIURL:      srv.URL,
-		WebURL:      "http://10.0.0.8:80",
-		Middlewares: []string{"authentik-forwardauth@file"},
+		WebURL:      "http://192.0.2.10:80",
+		Middlewares: []string{"forward-auth@file"},
 	}})
 
 	cfg, err := p.fetchEndpoint(context.Background(), 0)
@@ -70,24 +70,24 @@ func TestFetchEndpointTransform(t *testing.T) {
 		t.Fatalf("routers = %d, want 2 (got %v)", len(cfg.Routers), keys(cfg.Routers))
 	}
 
-	r, ok := cfg.Routers["grafana-argus"]
+	r, ok := cfg.Routers["grafana-alpha"]
 	if !ok {
-		t.Fatalf("missing router grafana-argus, got %v", keys(cfg.Routers))
+		t.Fatalf("missing router grafana-alpha, got %v", keys(cfg.Routers))
 	}
-	if r.Service != "argus-leaf" || r.Rule != "Host(`grafana.29c.sh`)" {
+	if r.Service != "alpha-leaf" || r.Rule != "Host(`grafana.example.com`)" {
 		t.Fatalf("router mismatch: %+v", r)
 	}
-	if len(r.Middlewares) != 1 || r.Middlewares[0] != "authentik-forwardauth@file" {
+	if len(r.Middlewares) != 1 || r.Middlewares[0] != "forward-auth@file" {
 		t.Fatalf("middlewares not attached: %+v", r.Middlewares)
 	}
-	if cfg.Routers["status-argus"].Priority != 20 {
-		t.Fatalf("priority not preserved: %+v", cfg.Routers["status-argus"])
+	if cfg.Routers["status-alpha"].Priority != 20 {
+		t.Fatalf("priority not preserved: %+v", cfg.Routers["status-alpha"])
 	}
 
 	// One shared service at the leaf's web entrypoint — never the
 	// leaf's own container-network backends.
-	svc, ok := cfg.Services["argus-leaf"]
-	if !ok || len(svc.LoadBalancer.Servers) != 1 || svc.LoadBalancer.Servers[0].URL != "http://10.0.0.8:80" {
+	svc, ok := cfg.Services["alpha-leaf"]
+	if !ok || len(svc.LoadBalancer.Servers) != 1 || svc.LoadBalancer.Servers[0].URL != "http://192.0.2.10:80" {
 		t.Fatalf("service mismatch: %+v", svc)
 	}
 }
@@ -99,7 +99,7 @@ func TestRefreshIsolatesDeadEndpoint(t *testing.T) {
 	defer srv.Close()
 
 	p := testProvider(t, []Endpoint{
-		{Name: "alive", APIURL: srv.URL, WebURL: "http://10.0.0.8:80"},
+		{Name: "alive", APIURL: srv.URL, WebURL: "http://192.0.2.10:80"},
 		// TEST-NET-1 address: unroutable, fails fast via timeout.
 		{Name: "dead", APIURL: "http://192.0.2.1:9", WebURL: "http://192.0.2.1:80"},
 	})
@@ -124,7 +124,7 @@ func TestRefreshServesLastGoodWhenEndpointDies(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := testProvider(t, []Endpoint{{Name: "argus", APIURL: srv.URL, WebURL: "http://10.0.0.8:80"}})
+	p := testProvider(t, []Endpoint{{Name: "alpha", APIURL: srv.URL, WebURL: "http://192.0.2.10:80"}})
 
 	out := make(chan json.Marshaler, 2)
 	p.refresh(context.Background(), out)
@@ -133,7 +133,7 @@ func TestRefreshServesLastGoodWhenEndpointDies(t *testing.T) {
 	alive = false
 	p.refresh(context.Background(), out)
 	payload := (<-out).(dynamic.JSONPayload)
-	if _, ok := payload.Configuration.HTTP.Routers["grafana-argus"]; !ok {
+	if _, ok := payload.Configuration.HTTP.Routers["grafana-alpha"]; !ok {
 		t.Fatal("last-known-good not served after endpoint failure")
 	}
 }
@@ -159,9 +159,9 @@ func TestRouteMiddlewaresOverride(t *testing.T) {
 	defer srv.Close()
 
 	p := testProvider(t, []Endpoint{{
-		Name:        "argus",
+		Name:        "alpha",
 		APIURL:      srv.URL,
-		WebURL:      "http://10.0.0.8:80",
+		WebURL:      "http://192.0.2.10:80",
 		Middlewares: []string{"a@file"},
 		RouteMiddlewares: map[string][]string{
 			"status": {"b@file"},
@@ -173,11 +173,11 @@ func TestRouteMiddlewaresOverride(t *testing.T) {
 		t.Fatalf("fetchEndpoint: %s", err)
 	}
 
-	if mw := cfg.Routers["status-argus"].Middlewares; len(mw) != 1 || mw[0] != "b@file" {
-		t.Fatalf("status-argus middlewares = %v, want [b@file]", mw)
+	if mw := cfg.Routers["status-alpha"].Middlewares; len(mw) != 1 || mw[0] != "b@file" {
+		t.Fatalf("status-alpha middlewares = %v, want [b@file]", mw)
 	}
-	if mw := cfg.Routers["grafana-argus"].Middlewares; len(mw) != 1 || mw[0] != "a@file" {
-		t.Fatalf("grafana-argus (no override) middlewares = %v, want endpoint default [a@file]", mw)
+	if mw := cfg.Routers["grafana-alpha"].Middlewares; len(mw) != 1 || mw[0] != "a@file" {
+		t.Fatalf("grafana-alpha (no override) middlewares = %v, want endpoint default [a@file]", mw)
 	}
 }
 
@@ -188,9 +188,9 @@ func TestRouteMiddlewaresEmptyListCarveOut(t *testing.T) {
 	defer srv.Close()
 
 	p := testProvider(t, []Endpoint{{
-		Name:        "argus",
+		Name:        "alpha",
 		APIURL:      srv.URL,
-		WebURL:      "http://10.0.0.8:80",
+		WebURL:      "http://192.0.2.10:80",
 		Middlewares: []string{"a@file"},
 		RouteMiddlewares: map[string][]string{
 			"grafana": {},
@@ -202,11 +202,11 @@ func TestRouteMiddlewaresEmptyListCarveOut(t *testing.T) {
 		t.Fatalf("fetchEndpoint: %s", err)
 	}
 
-	if mw := cfg.Routers["grafana-argus"].Middlewares; len(mw) != 0 {
-		t.Fatalf("grafana-argus middlewares = %v, want none (empty-list carve-out)", mw)
+	if mw := cfg.Routers["grafana-alpha"].Middlewares; len(mw) != 0 {
+		t.Fatalf("grafana-alpha middlewares = %v, want none (empty-list carve-out)", mw)
 	}
-	if mw := cfg.Routers["status-argus"].Middlewares; len(mw) != 1 || mw[0] != "a@file" {
-		t.Fatalf("status-argus middlewares = %v, want endpoint default [a@file]", mw)
+	if mw := cfg.Routers["status-alpha"].Middlewares; len(mw) != 1 || mw[0] != "a@file" {
+		t.Fatalf("status-alpha middlewares = %v, want endpoint default [a@file]", mw)
 	}
 }
 
@@ -217,9 +217,9 @@ func TestRouteMiddlewaresFallbackToEndpointDefault(t *testing.T) {
 	defer srv.Close()
 
 	p := testProvider(t, []Endpoint{{
-		Name:             "argus",
+		Name:             "alpha",
 		APIURL:           srv.URL,
-		WebURL:           "http://10.0.0.8:80",
+		WebURL:           "http://192.0.2.10:80",
 		Middlewares:      []string{"a@file"},
 		RouteMiddlewares: map[string][]string{}, // no entries at all: pure fallback
 	}})
@@ -229,7 +229,7 @@ func TestRouteMiddlewaresFallbackToEndpointDefault(t *testing.T) {
 		t.Fatalf("fetchEndpoint: %s", err)
 	}
 
-	for _, name := range []string{"grafana-argus", "status-argus"} {
+	for _, name := range []string{"grafana-alpha", "status-alpha"} {
 		if mw := cfg.Routers[name].Middlewares; len(mw) != 1 || mw[0] != "a@file" {
 			t.Fatalf("%s middlewares = %v, want endpoint default [a@file]", name, mw)
 		}
@@ -243,9 +243,9 @@ func TestUnmatchedRouteMiddlewaresKeyLoggedOnce(t *testing.T) {
 	defer srv.Close()
 
 	p := testProvider(t, []Endpoint{{
-		Name:   "argus",
+		Name:   "alpha",
 		APIURL: srv.URL,
-		WebURL: "http://10.0.0.8:80",
+		WebURL: "http://192.0.2.10:80",
 		RouteMiddlewares: map[string][]string{
 			"ghost": {"a@file"},
 		},

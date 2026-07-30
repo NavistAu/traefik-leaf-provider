@@ -11,7 +11,8 @@ does its own final routing.
 
 One edge instance — the one holding your certificates, your forward-auth, your
 rate limits — serves the routes of an entire estate of downstream Traefik
-instances, and you never write a route on the edge by hand.
+instances, and you never write a route on the edge by hand. One routing table,
+one API, every hostname in the estate.
 
 Purpose-built after evaluating the existing aggregator plugins
 (im-kulikov/traefik-provider, MadddinTribleD/traefikaggregator,
@@ -62,29 +63,17 @@ the router rules, and it makes an equivalent router on the main instance. Each
 emitted router sends its traffic to the web entrypoint of that leaf instance.
 The leaf instance then does its own final routing.
 
-```
-                       client
-                          |
-                          | Host: grafana.example.com
-                          v
-              +-------------------------+
-     hop 1    |      main instance      |
-              |  (this plugin operates  |
-              |        in here)         |
-              +-------------------------+
-                    |               ^
-                    |               |  poll: GET /api/rawdata
-                    |               |  every pollInterval
-                    v               |
-              +-------------------------+
-     hop 2    |      leaf instance      |
-              +-------------------------+
-                          |
-                          | the leaf instance does its own routing
-                          v
-                    +-----------+
-                    |  grafana  |
-                    +-----------+
+```mermaid
+flowchart TB
+    client(["client"])
+    main["<b>main instance</b><br/><i>this plugin operates here</i>"]
+    leaf["<b>leaf instance</b>"]
+    backend["grafana"]
+
+    client -- "hop 1<br/>Host: grafana.example.com" --> main
+    main -- "hop 2<br/>forward to webUrl" --> leaf
+    leaf -- "the leaf instance does<br/>its own final routing" --> backend
+    main -. "poll: GET apiUrl/api/rawdata<br/>every pollInterval" .-> leaf
 ```
 
 The plugin does not copy the backend definitions from a leaf instance. The
@@ -98,6 +87,16 @@ The shape this fits: an edge Traefik that owns your certificates and your auth,
 plus one or more downstream Traefik instances whose *backends* the edge cannot
 reach — separate hosts, separate container networks, a DMZ, a tailnet. Services
 come and go downstream, and you would rather not write each route twice.
+
+There is a second-order win that is easy to miss, and for some estates it is
+the *main* one: aggregation centralises the hostnames. Every route in the
+estate now appears in one routing table, on one API, so anything that consumes
+Traefik's routers gets the whole picture from a single place instead of being
+pointed at every leaf in turn. The obvious consumer is DNS — a CoreDNS plugin
+that syncs records from Traefik will resolve names for downstream services it
+has never heard of, purely because the edge now knows about them. Certificate
+tooling, uptime checks, and dashboards get the same benefit for the same
+reason.
 
 Two hops is the price. Every request traverses both instances, and the leaf
 sees the traffic. If that is unacceptable, you want a flat network and one
@@ -206,15 +205,15 @@ providers:
       pollInterval: 5s
       requestTimeout: 3s
       endpoints:
-        - name: argus
-          apiUrl: http://10.0.0.8:8080
-          webUrl: http://10.0.0.8:80
+        - name: alpha
+          apiUrl: http://192.0.2.10:8080
+          webUrl: http://192.0.2.10:80
           middlewares:
-            - authentik-forwardauth@file
+            - forward-auth@file
           routeMiddlewares:
-            grafana-leaf: []
-            status-leaf:
-              - authentik-forwardauth@file
+            grafana: []
+            status:
+              - forward-auth@file
 ```
 
 The key `leafprovider` must match the key you used in `experimental`.
@@ -247,7 +246,7 @@ poll cycle takes `requestTimeout` multiplied by the number of endpoints.
 | `routeMiddlewares` | map of string to list of string | No | Middlewares for named routes. Replaces `middlewares` for those routes. See [Middlewares](#middlewares). |
 
 Give each middleware its full name, with the provider part. Write
-`authentik-forwardauth@file`, not `authentik-forwardauth`. The middleware must
+`forward-auth@file`, not `forward-auth`. The middleware must
 exist on the **main** instance. The plugin does not copy middlewares from a
 leaf instance.
 
@@ -278,11 +277,11 @@ The service name for an endpoint is:
 <endpoint name>-leaf
 ```
 
-For example, the leaf router `grafana@docker` on the endpoint `argus` becomes
-the router `grafana-argus`. That router uses the service `argus-leaf`.
+For example, the leaf router `grafana@docker` on the endpoint `alpha` becomes
+the router `grafana-alpha`. That router uses the service `alpha-leaf`.
 
 Traefik adds its own provider part to these names. In the Traefik API and
-dashboard you see `grafana-argus@plugin-leafprovider`.
+dashboard you see `grafana-alpha@plugin-leafprovider`.
 
 The plugin copies the `rule` and the `priority` of each leaf router. It sets
 the service and the middlewares itself.
@@ -313,31 +312,31 @@ for a concern that applies to the whole leaf instance, such as forward
 authentication.
 
 ```yaml
-- name: argus
-  apiUrl: http://10.0.0.8:8080
-  webUrl: http://10.0.0.8:80
+- name: alpha
+  apiUrl: http://192.0.2.10:8080
+  webUrl: http://192.0.2.10:80
   middlewares:
-    - authentik-forwardauth@file
+    - forward-auth@file
 ```
 
-Every route from `argus` now goes through `authentik-forwardauth@file`.
+Every route from `alpha` now goes through `forward-auth@file`.
 
 ### Per-route level
 
 `routeMiddlewares` sets the middlewares for named routes. The keys are **base
-names** of leaf routers. The rawdata key `grafana-leaf@docker` has the base
-name `grafana-leaf`.
+names** of leaf routers. The rawdata key `grafana@docker` has the base
+name `grafana`.
 
 ```yaml
-- name: argus
-  apiUrl: http://10.0.0.8:8080
-  webUrl: http://10.0.0.8:80
+- name: alpha
+  apiUrl: http://192.0.2.10:8080
+  webUrl: http://192.0.2.10:80
   middlewares:
-    - authentik-forwardauth@file
+    - forward-auth@file
   routeMiddlewares:
-    grafana-leaf: []
-    status-leaf:
-      - authentik-forwardauth@file
+    grafana: []
+    status:
+      - forward-auth@file
       - ratelimit@file
 ```
 
@@ -345,9 +344,20 @@ This configuration gives three different results.
 
 | Leaf router | Middlewares attached | Reason |
 | --- | --- | --- |
-| `grafana-leaf@docker` | none | The key is present with an empty list. |
-| `status-leaf@docker` | `authentik-forwardauth@file`, `ratelimit@file` | The key is present with a list. That list replaces the endpoint list. |
-| `prometheus@docker` | `authentik-forwardauth@file` | No key is present. The endpoint list applies. |
+| `grafana@docker` | none | The key is present with an empty list. |
+| `status@docker` | `forward-auth@file`, `ratelimit@file` | The key is present with a list. That list replaces the endpoint list. |
+| `prometheus@docker` | `forward-auth@file` | No key is present. The endpoint list applies. |
+
+The plugin resolves the middlewares for each router this way.
+
+```mermaid
+flowchart TD
+    A["a leaf router,<br/>e.g. grafana@docker"] --> B{"is its base name a key<br/>in routeMiddlewares?"}
+    B -- "no" --> C["attach the endpoint<br/>middlewares list"]
+    B -- "yes" --> D{"is that key's value<br/>an empty list?"}
+    D -- "yes" --> E["attach nothing"]
+    D -- "no" --> F["attach that list, and<br/>ignore the endpoint list"]
+```
 
 Read these rules again, because the behaviour is deliberate.
 
@@ -388,11 +398,11 @@ provider name you configured.
 ### An endpoint failed
 
 ```
-leaf-provider leafprovider: endpoint "argus": fetch: dial tcp 10.0.0.8:8080: connect: connection refused (serving last known good)
+leaf-provider leafprovider: endpoint "alpha": fetch: dial tcp 192.0.2.10:8080: connect: connection refused (serving last known good)
 ```
 
 The plugin could not read this endpoint. It logs this on every failed poll
-cycle. The text after `endpoint "argus":` states the cause.
+cycle. The text after `endpoint "alpha":` states the cause.
 
 | Text | Cause |
 | --- | --- |
@@ -404,7 +414,7 @@ cycle. The text after `endpoint "argus":` states the cause.
 ### A routeMiddlewares key matched no route
 
 ```
-leaf-provider leafprovider: endpoint "argus": routeMiddlewares keys matching no leaf router: [staus-leaf]
+leaf-provider leafprovider: endpoint "alpha": routeMiddlewares keys matching no leaf router: [staus]
 ```
 
 One or more keys in `routeMiddlewares` match no router on that leaf instance.
@@ -436,13 +446,13 @@ Do these checks in order.
 3. Confirm that the main instance can reach the leaf instance API.
 
    ```sh
-   curl -s http://10.0.0.8:8080/api/rawdata | head -c 200
+   curl -s http://192.0.2.10:8080/api/rawdata | head -c 200
    ```
 
 4. Confirm that the leaf instance has routers with rules.
 
    ```sh
-   curl -s http://10.0.0.8:8080/api/rawdata | jq '.routers | keys'
+   curl -s http://192.0.2.10:8080/api/rawdata | jq '.routers | keys'
    ```
 
    The plugin ignores routers that end with `@internal`. This is intended.
@@ -458,7 +468,7 @@ is at hop 2.
 Test the leaf instance directly. Use the `Host` header of the route.
 
 ```sh
-curl -i -H 'Host: grafana.example.com' http://10.0.0.8:80/
+curl -i -H 'Host: grafana.example.com' http://192.0.2.10:80/
 ```
 
 If this fails, the problem is in the leaf instance or in its backend, not in
@@ -471,7 +481,7 @@ main instance.
 
    ```sh
    curl -s http://127.0.0.1:8080/api/rawdata \
-     | jq '.routers["grafana-argus@plugin-leafprovider"].middlewares'
+     | jq '.routers["grafana-alpha@plugin-leafprovider"].middlewares'
    ```
 
 2. If the list is wrong, look for a `routeMiddlewares` key with that base name.

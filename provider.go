@@ -39,17 +39,17 @@ import (
 // Endpoint is one leaf traefik instance.
 type Endpoint struct {
 	// Name namespaces the emitted routers (router "grafana@docker" on
-	// leaf "argus" becomes "grafana-argus"). Required, unique.
+	// leaf "alpha" becomes "grafana-alpha"). Required, unique.
 	Name string `json:"name" yaml:"name"`
 	// APIURL is the base URL of the leaf's traefik API, e.g.
-	// "http://10.0.0.8:8080". "/api/rawdata" is appended.
+	// "http://192.0.2.10:8080". "/api/rawdata" is appended.
 	APIURL string `json:"apiUrl" yaml:"apiUrl"`
 	// WebURL is where matched traffic is forwarded — the leaf's web
-	// entrypoint, e.g. "http://10.0.0.8:80".
+	// entrypoint, e.g. "http://192.0.2.10:80".
 	WebURL string `json:"webUrl" yaml:"webUrl"`
 	// Middlewares are attached to every router emitted for this
 	// endpoint, referenced with their full provider suffix, e.g.
-	// "authentik-forwardauth@file". Optional.
+	// "forward-auth@file". Optional.
 	Middlewares []string `json:"middlewares" yaml:"middlewares"`
 	// RouteMiddlewares overrides Middlewares per router, keyed by the
 	// leaf router's base name (rawdata key with its "@provider" suffix

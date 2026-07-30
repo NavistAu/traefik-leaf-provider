@@ -53,10 +53,21 @@ is the first tagged, published version, so everything below ships together.
 - Contributor documentation: `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`,
   `SECURITY.md`, issue templates, and a pull request template.
 - A full user-facing README: defined terms, both installation methods, a
-  complete configuration reference, error and log message tables, and
-  troubleshooting. The reference and procedural sections follow ASD-STE100
-  simplified technical English; the introductory and design sections keep an
-  ordinary voice. `CONTRIBUTING.md` documents where the boundary falls.
+  complete configuration reference, Mermaid diagrams for the two-hop path and
+  for middleware resolution, error and log message tables, and troubleshooting.
+  The reference and procedural sections follow ASD-STE100 simplified technical
+  English; the introductory and design sections keep an ordinary voice.
+  `CONTRIBUTING.md` documents where the boundary falls.
+- The README now states the DNS benefit of aggregation: every hostname in the
+  estate lands in one routing table, so a CoreDNS plugin that syncs records
+  from Traefik resolves downstream services without being pointed at each leaf.
+
+### Changed
+
+- Documentation and test fixtures use neutral example identifiers throughout —
+  RFC 5737 documentation addresses, `example.com`, and generic endpoint and
+  middleware names. No deployment-specific host names, addresses, or domains
+  remain in the published source.
 
 ### Fixed
 
