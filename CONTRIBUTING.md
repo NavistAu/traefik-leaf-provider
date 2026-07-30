@@ -49,17 +49,28 @@ this code twice already:
   type json.Marshaler". `refresh` uses a plain channel send instead. This was
   found empirically, in E2E, on 2026-07-23.
 
+`crypto/tls`, `crypto/x509` and `os.ReadFile` were spiked against Traefik v3.7
+on 2026-07-30 and all resolve under Yaegi, which is what makes the endpoint
+`tls` block possible at all. Do not assume the next stdlib package you reach
+for is available — spike it in the E2E harness first, the same way.
+
 A green `go test ./...` therefore proves very little about whether the plugin
 works. **Run the E2E suite before you open a PR**, and again after any review
 change that touches `provider.go`. CI runs it on every pull request, but a
 local run is much faster than a round trip.
 
 The E2E suite starts a main Traefik instance that loads this repository as a
-local plugin, one live leaf with two `whoami` backends, and one deliberately
-dead endpoint. It asserts nine things: startup survives the dead endpoint,
+local plugin, one live leaf with two `whoami` backends, one deliberately dead
+endpoint, and an nginx gate that fronts the leaf API with `ssl_verify_client
+on`. It asserts thirteen things: startup survives the dead endpoint,
 aggregation and naming work, a request two-hops end to end, routers land in the
-plugin's provider namespace, the dead endpoint is logged and isolated, and the
-four `routeMiddlewares` behaviours hold.
+plugin's provider namespace, the dead endpoint is logged and isolated, the four
+`routeMiddlewares` behaviours hold, an endpoint aggregates through the mTLS
+gate, an endpoint with no client keypair is rejected by it, the generated
+serversTransport resolves, and the plain routes still work alongside all of it.
+
+The suite generates its own certificates on first run into `test/e2e/certs/`,
+which is gitignored. No key material is committed and nothing expires.
 
 If you add a behaviour, add an assertion to `test/e2e/run.sh`. A behaviour that
 only the compiled suite covers is a behaviour nobody has actually tested.
@@ -158,6 +169,11 @@ cosmetic:
   and Yaegi findings. Keep that.
 - **Index-based loops over endpoints.** See the Yaegi note above. Do not
   "clean these up" into range loops with closures.
+
+Certificate files must never be read during `New()` or `Init()`. Build TLS
+material lazily at poll time so an unreadable path degrades one endpoint
+instead of aborting provider init. Only reject shape errors that can never
+become valid, such as a keypair missing one half.
 
 `Init()` must never do network input or output. Traefik treats a provider init
 failure as fatal, so one unreachable leaf during a restart would take down every

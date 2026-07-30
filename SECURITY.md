@@ -44,6 +44,8 @@ a bug. Examples of in-scope reports:
   over whatever scheme you configure in `webUrl`. Protecting that hop is a
   deployment decision.
 - **An exposed leaf API.** The provider reads `/api/rawdata` from each leaf.
-  Restrict that API to the main instance at the network level.
+  Restrict that API to the main instance at the network level. The endpoint
+  `tls` block can authenticate that poll with a client certificate, but a leaf
+  API left open to the network is still open.
 - Vulnerabilities in Traefik itself. Report those to
   [the Traefik project](https://github.com/traefik/traefik/security).

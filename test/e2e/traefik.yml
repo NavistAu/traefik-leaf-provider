@@ -33,3 +33,24 @@ providers:
         - name: deadleaf
           apiUrl: http://192.0.2.1:9
           webUrl: http://192.0.2.1:80
+        # Polls the leaf API through an mTLS gate. Aggregating anything
+        # here proves the hop-1 TLS path (private CA + client keypair)
+        # executes under Yaegi, not just under the compiler.
+        - name: mtlsleaf
+          apiUrl: https://leafmtls:8443
+          webUrl: http://leaf:80
+          tls:
+            rootCAs:
+              - /certs/ca.pem
+            certificates:
+              - certFile: /certs/client.crt
+                keyFile: /certs/client.key
+        # Same gate, CA but NO client keypair. Negative control: the gate
+        # must reject it, proving mTLS is genuinely enforced and that the
+        # endpoint above is not passing for some unrelated reason.
+        - name: mtlsnocert
+          apiUrl: https://leafmtls:8443
+          webUrl: http://leaf:80
+          tls:
+            rootCAs:
+              - /certs/ca.pem

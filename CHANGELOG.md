@@ -13,6 +13,45 @@ control.
 
 Nothing yet.
 
+## [1.2.0] - 2026-07-30
+
+Per-endpoint TLS on both hops, which is what this needs to be usable in a
+zero-trust estate rather than only on a trusted network.
+
+### Added
+
+- `tls` on an endpoint: `rootCAs`, `certificates` (client keypairs for mTLS),
+  `serverName`, and `insecureSkipVerify`. One block configures **both** hops —
+  the plugin's own poll of the leaf API, and Traefik's forward to the leaf's
+  web entrypoint. The poll hop had no TLS configuration at all before this, so
+  a leaf API behind a private CA or a client-certificate requirement was
+  unreachable.
+- `serversTransport` on an endpoint: names an existing Traefik serversTransport
+  for the traffic hop, overriding the generated one. This is the escape hatch
+  for transport options the `tls` block does not model, such as SPIFFE, cipher
+  suites, and forwarding timeouts. It also makes the two hops configurable
+  separately.
+- The plugin now emits a `serversTransport` per TLS-configured endpoint, named
+  `<endpoint>-transport`, and points that endpoint's service at it.
+- A startup warning when `insecureSkipVerify` is set on an endpoint.
+- E2E coverage for all of the above against a real mTLS-gated leaf API,
+  including a negative control that proves the gate rejects an endpoint with no
+  client keypair.
+
+### Changed
+
+- `serversTransport` on an emitted service was previously always empty, so
+  every endpoint used Traefik's global default transport. Endpoints with no
+  `tls` and no `serversTransport` still do; only configured endpoints change.
+
+### Security
+
+- Certificate files are read lazily at poll time, never during `New()` or
+  `Init()`. A path that is briefly unreadable — a secret still mounting during
+  a restart — degrades that one endpoint and retries, rather than failing
+  provider init and taking every route in the estate down. A keypair missing
+  one half is still rejected at startup, because it can never become valid.
+
 ## [1.1.0] - 2026-07-26
 
 First public release. Versions 1.0.0 and 1.1.0 were developed internally; this
@@ -76,5 +115,6 @@ is the first tagged, published version, so everything below ships together.
   — searched the log once. A dead endpoint only logs after its `requestTimeout`
   elapses, so both could fail spuriously. They now retry.
 
-[Unreleased]: https://github.com/NavistAu/traefik-leaf-provider/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/NavistAu/traefik-leaf-provider/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/NavistAu/traefik-leaf-provider/releases/tag/v1.2.0
 [1.1.0]: https://github.com/NavistAu/traefik-leaf-provider/releases/tag/v1.1.0
