@@ -79,7 +79,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: ${{ needs.gate.outputs.goVersion }}
       - name: Unit tests
@@ -131,7 +131,7 @@ jobs:
     if: ${{ !github.event.repository.private }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: ${{ needs.gate.outputs.goVersion }}
       # Catalog discovery reads this plugin from proxy.golang.org, not from
