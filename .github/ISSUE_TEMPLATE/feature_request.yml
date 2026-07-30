@@ -1,0 +1,47 @@
+name: Feature request
+description: Propose a change to what the provider does.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This plugin is deliberately small. It aggregates router rules and
+        forwards to a leaf's web entrypoint, and it tries to do nothing else.
+        Proposals that add configuration surface need a clear reason why the
+        problem cannot be solved in Traefik's own configuration.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What can you not do today? Describe the deployment, not the fix.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behaviour
+      description: >-
+        What should the provider do instead? If this adds configuration, show
+        the YAML you would want to write.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you tried instead
+      description: >-
+        Which Traefik-native options did you rule out, and why did they not
+        work? Static file provider, middleware chains, a second entrypoint.
+    validations:
+      required: true
+
+  - type: textarea
+    id: blast-radius
+    attributes:
+      label: Effect on existing deployments
+      description: >-
+        Does an existing configuration keep working unchanged? Does this change
+        which routes a middleware applies to? Say so plainly.

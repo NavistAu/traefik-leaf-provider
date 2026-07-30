@@ -1,11 +1,12 @@
 displayName: Leaf Provider
 type: provider
-import: github.com/jhogendorn/traefik-leaf-provider
+import: github.com/NavistAu/traefik-leaf-provider
 summary: >-
   Aggregates Host rules from downstream "leaf" traefik instances and
   forwards matched traffic to each leaf's web entrypoint (two-hop).
   No network I/O at init; per-endpoint error isolation with
-  last-known-good fallback.
+  last-known-good fallback. Per-endpoint TLS, including a private CA
+  and client certificates (mTLS), on both the poll and the traffic hop.
 
 testData:
   pollInterval: 5s
@@ -14,3 +15,12 @@ testData:
     - name: example
       apiUrl: http://127.0.0.1:8080
       webUrl: http://127.0.0.1:80
+    - name: example-mtls
+      apiUrl: https://127.0.0.1:8443
+      webUrl: https://127.0.0.1:443
+      tls:
+        rootCAs:
+          - /certs/ca.pem
+        certificates:
+          - certFile: /certs/client.crt
+            keyFile: /certs/client.key

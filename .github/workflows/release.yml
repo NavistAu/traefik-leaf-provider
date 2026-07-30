@@ -1,0 +1,156 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Release even if the version in VERSION is already tagged"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+# Every push to `main` is a release: `main` only advances via the
+# develop -> main release PR, which is the gate. This workflow reads
+# VERSION and releases it unless that tag already exists. There is no
+# tag-push trigger, so no PAT or App token is needed — the tag `vX.Y.Z`
+# is created inside the run with the default GITHUB_TOKEN.
+#
+# The released tag is what the Traefik Plugin Catalog consumes, and a tag
+# is effectively immutable once the Go module proxy has cached it. So the
+# suite re-runs here before anything is tagged, rather than trusting the
+# CI run on the merge commit.
+jobs:
+  gate:
+    name: Release gate
+    runs-on: ubuntu-latest
+    outputs:
+      release: ${{ steps.decide.outputs.release }}
+      version: ${{ steps.decide.outputs.version }}
+      tag: ${{ steps.decide.outputs.tag }}
+      goVersion: ${{ steps.go.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # go.mod's `go` directive is a deliberately low language floor for
+      # plugin compatibility. mise.toml holds the toolchain CI builds with.
+      - name: Parse Go version from mise.toml
+        id: go
+        run: echo "version=$(grep '^go' mise.toml | sed 's/.*"\(.*\)"/\1/')" >> "$GITHUB_OUTPUT"
+
+      - name: Decide whether to release
+        id: decide
+        run: |
+          VERSION=$(tr -d '[:space:]' < VERSION)
+          TAG="v${VERSION}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "VERSION (${VERSION}) is not a bare semver X.Y.Z."
+            exit 1
+          fi
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.force }}" = "true" ]; then
+            echo "Forced release of ${TAG}."
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          elif git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "Tag ${TAG} already exists; nothing to release."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Releasing ${TAG}."
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: CHANGELOG has an entry for this version
+        if: steps.decide.outputs.release == 'true'
+        run: |
+          grep -q "^## \[${{ steps.decide.outputs.version }}\]" CHANGELOG.md \
+            || { echo "CHANGELOG.md has no '## [${{ steps.decide.outputs.version }}]' section."; exit 1; }
+
+  verify:
+    name: Verify before tagging
+    needs: gate
+    if: needs.gate.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ needs.gate.outputs.goVersion }}
+      - name: Unit tests
+        run: go test -race ./...
+      - name: E2E suite
+        run: ./test/e2e/run.sh
+
+  release:
+    name: Tag and publish
+    needs: [gate, verify]
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ needs.gate.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # The install artifact for the local-plugin path: the plugin source
+      # plus its vendored dependencies, laid out ready to unpack into
+      # plugins-local/src/github.com/NavistAu/traefik-leaf-provider.
+      - name: Build local-plugin tarball
+        run: |
+          TAG="${{ needs.gate.outputs.tag }}"
+          STAGE="dist/traefik-leaf-provider"
+          mkdir -p "$STAGE"
+          cp -R provider.go go.mod go.sum vendor .traefik.yml LICENSE README.md "$STAGE/"
+          tar czf "traefik-leaf-provider-${TAG}.tar.gz" -C dist traefik-leaf-provider
+          sha256sum "traefik-leaf-provider-${TAG}.tar.gz" > "traefik-leaf-provider-${TAG}.tar.gz.sha256"
+          cat "traefik-leaf-provider-${TAG}.tar.gz.sha256"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          # Triggered by a push to main rather than a tag, so name the tag
+          # explicitly; the action creates it on this commit.
+          tag_name: ${{ needs.gate.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          generate_release_notes: true
+          files: |
+            traefik-leaf-provider-*.tar.gz
+            traefik-leaf-provider-*.tar.gz.sha256
+
+  warm-proxy:
+    name: Warm the Go module proxy
+    needs: [gate, release]
+    runs-on: ubuntu-latest
+    # proxy.golang.org cannot fetch a private module, so this would fail
+    # for the whole time the repository is private. Skip rather than go
+    # permanently red; the first release after going public warms it.
+    if: ${{ !github.event.repository.private }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ needs.gate.outputs.goVersion }}
+      # Catalog discovery reads this plugin from proxy.golang.org, not from
+      # GitHub directly. Requesting the new version here makes the proxy
+      # fetch it now instead of on the catalog's next poll.
+      - name: Request the new version from proxy.golang.org
+        env:
+          GOPROXY: https://proxy.golang.org
+          GOFLAGS: -mod=mod
+        run: |
+          MODULE=$(grep -m1 '^module ' go.mod | awk '{print $2}')
+          for i in $(seq 1 10); do
+            if go list -m "${MODULE}@${{ needs.gate.outputs.tag }}"; then
+              echo "Proxy has ${{ needs.gate.outputs.tag }}."
+              exit 0
+            fi
+            echo "Proxy does not have the tag yet (attempt ${i}); waiting."
+            sleep 30
+          done
+          echo "Proxy did not pick up the tag within ~5 minutes."
+          echo "This is not fatal — the catalog polls again later — but check it."
+          exit 1

@@ -20,36 +20,85 @@
 //     Yaegi (traefik's interpreter), whose loop-variable capture
 //     semantics have diverged from compiled Go and shipped exactly
 //     that bug in a prior plugin.
+//   - TLS material is NEVER read during New()/Init(), only lazily at
+//     poll time: a cert path that is momentarily unreadable (a secret
+//     still mounting during a restart) must degrade one endpoint, not
+//     abort provider init and take the whole estate down with it. Only
+//     shape errors that can never resolve — a keypair missing one half
+//     — are rejected up front.
+//
+// crypto/tls, crypto/x509 and os.ReadFile were all confirmed to resolve
+// under Yaegi against traefik v3.7 (spiked 2026-07-30); test/e2e drives
+// the full mTLS path so a future interpreter change cannot regress it
+// silently.
 package traefik_leaf_provider
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/traefik/genconf/dynamic"
+	tlstypes "github.com/traefik/genconf/dynamic/tls"
 )
+
+// Certificate is one client-certificate keypair, given as file paths.
+// Field names mirror traefik's own serversTransport certificates so an
+// operator writes the same shape in both places.
+type Certificate struct {
+	CertFile string `json:"certFile" yaml:"certFile"`
+	KeyFile  string `json:"keyFile" yaml:"keyFile"`
+}
+
+// ClientTLS configures TLS for BOTH hops of one endpoint:
+//
+//   - hop 1, this plugin's own poll of the leaf's API. Traefik has no
+//     say in this connection — it is a plain net/http client inside the
+//     plugin — so without this block there is no way to reach a leaf API
+//     behind a private CA or a client-certificate requirement.
+//   - hop 2, traefik's forward to the leaf's web entrypoint. The plugin
+//     emits an equivalent serversTransport and points the endpoint's
+//     service at it, so one block gates both hops the same way.
+//
+// Set Endpoint.ServersTransport instead to hand hop 2 to a transport you
+// define yourself; it takes precedence over the generated one.
+type ClientTLS struct {
+	// RootCAs are PEM bundle paths, ADDED to the system pool rather than
+	// replacing it. Empty means system trust only.
+	RootCAs []string `json:"rootCAs" yaml:"rootCAs"`
+	// Certificates are client keypairs presented to the leaf (mTLS).
+	Certificates []Certificate `json:"certificates" yaml:"certificates"`
+	// ServerName overrides SNI and the verified hostname. Use when the
+	// endpoint is addressed by IP but the certificate names a host.
+	ServerName string `json:"serverName" yaml:"serverName"`
+	// InsecureSkipVerify disables verification of the leaf's certificate.
+	// This removes the guarantee that you are talking to the leaf at all.
+	InsecureSkipVerify bool `json:"insecureSkipVerify" yaml:"insecureSkipVerify"`
+}
 
 // Endpoint is one leaf traefik instance.
 type Endpoint struct {
 	// Name namespaces the emitted routers (router "grafana@docker" on
-	// leaf "argus" becomes "grafana-argus"). Required, unique.
+	// leaf "alpha" becomes "grafana-alpha"). Required, unique.
 	Name string `json:"name" yaml:"name"`
 	// APIURL is the base URL of the leaf's traefik API, e.g.
-	// "http://10.0.0.8:8080". "/api/rawdata" is appended.
+	// "http://192.0.2.10:8080". "/api/rawdata" is appended.
 	APIURL string `json:"apiUrl" yaml:"apiUrl"`
 	// WebURL is where matched traffic is forwarded — the leaf's web
-	// entrypoint, e.g. "http://10.0.0.8:80".
+	// entrypoint, e.g. "http://192.0.2.10:80".
 	WebURL string `json:"webUrl" yaml:"webUrl"`
 	// Middlewares are attached to every router emitted for this
 	// endpoint, referenced with their full provider suffix, e.g.
-	// "authentik-forwardauth@file". Optional.
+	// "forward-auth@file". Optional.
 	Middlewares []string `json:"middlewares" yaml:"middlewares"`
 	// RouteMiddlewares overrides Middlewares per router, keyed by the
 	// leaf router's base name (rawdata key with its "@provider" suffix
@@ -59,6 +108,14 @@ type Endpoint struct {
 	// router, including an explicitly-empty list (no middlewares). A
 	// router with no key here falls back to Middlewares. Optional.
 	RouteMiddlewares map[string][]string `json:"routeMiddlewares" yaml:"routeMiddlewares"`
+	// TLS configures both hops for this endpoint. Optional; without it
+	// hop 1 uses system trust and hop 2 uses traefik's global default
+	// serversTransport, which is the v1 behaviour.
+	TLS *ClientTLS `json:"tls" yaml:"tls"`
+	// ServersTransport names an existing traefik serversTransport for
+	// hop 2, e.g. "leaf-mtls@file". Takes precedence over the transport
+	// generated from TLS. Optional.
+	ServersTransport string `json:"serversTransport" yaml:"serversTransport"`
 }
 
 // Config is the plugin configuration.
@@ -81,6 +138,13 @@ type Provider struct {
 	pollInterval time.Duration
 	client       *http.Client
 	endpoints    []Endpoint
+
+	// clients holds the per-endpoint poll client for endpoints that set
+	// TLS; nil entries fall back to client. Built lazily on first use and
+	// cached, so a cert file that is not readable yet degrades that one
+	// endpoint (logged, last-known-good served) and is retried next poll,
+	// rather than being fatal to every route in the estate at startup.
+	clients []*http.Client
 
 	// lastGood holds the most recent successfully-built config per
 	// endpoint index; on poll failure the stale copy keeps serving
@@ -124,6 +188,26 @@ func New(ctx context.Context, config *Config, name string) (*Provider, error) {
 			return nil, fmt.Errorf("duplicate endpoint name %q", e.Name)
 		}
 		seen[e.Name] = true
+
+		// Shape-only checks. Deliberately NOT reading the files here: a
+		// cert path that is briefly unreadable (a secret still mounting
+		// during a restart) must degrade one endpoint, not abort provider
+		// init and take down every route. A half-specified keypair, by
+		// contrast, can never become valid, so reject it now.
+		if e.TLS != nil {
+			for j := range e.TLS.Certificates {
+				c := e.TLS.Certificates[j]
+				if (c.CertFile == "") != (c.KeyFile == "") {
+					return nil, fmt.Errorf("endpoint %q: tls.certificates[%d]: certFile and keyFile must both be set", e.Name, j)
+				}
+				if c.CertFile == "" {
+					return nil, fmt.Errorf("endpoint %q: tls.certificates[%d]: empty entry", e.Name, j)
+				}
+			}
+			if e.TLS.InsecureSkipVerify {
+				log.Printf("leaf-provider %s: endpoint %q: tls.insecureSkipVerify is set — the leaf's certificate is NOT verified on either hop", name, e.Name)
+			}
+		}
 	}
 
 	return &Provider{
@@ -131,10 +215,90 @@ func New(ctx context.Context, config *Config, name string) (*Provider, error) {
 		pollInterval:  poll,
 		client:        &http.Client{Timeout: reqTimeout},
 		endpoints:     config.Endpoints,
+		clients:       make([]*http.Client, len(config.Endpoints)),
 		lastGood:      make([]*dynamic.HTTPConfiguration, len(config.Endpoints)),
 		lastUnmatched: make([][]string, len(config.Endpoints)),
 		done:          make(chan struct{}),
 	}, nil
+}
+
+// clientFor returns the poll client for one endpoint, building and
+// caching a TLS-configured one on first use. Errors here are returned to
+// the caller so they land on the normal per-endpoint failure path.
+func (p *Provider) clientFor(idx int) (*http.Client, error) {
+	if p.endpoints[idx].TLS == nil {
+		return p.client, nil
+	}
+	if p.clients[idx] != nil {
+		return p.clients[idx], nil
+	}
+
+	tlsCfg, err := buildTLSConfig(p.endpoints[idx].TLS)
+	if err != nil {
+		return nil, err
+	}
+	c := &http.Client{
+		Timeout:   p.client.Timeout,
+		Transport: &http.Transport{TLSClientConfig: tlsCfg},
+	}
+	p.clients[idx] = c
+	return c, nil
+}
+
+// buildTLSConfig turns an endpoint's TLS block into a *tls.Config for
+// hop 1. Index-based loops — see package comment.
+func buildTLSConfig(c *ClientTLS) (*tls.Config, error) {
+	out := &tls.Config{
+		ServerName:         c.ServerName,
+		InsecureSkipVerify: c.InsecureSkipVerify,
+		MinVersion:         tls.VersionTLS12,
+	}
+
+	if len(c.RootCAs) > 0 {
+		// Add to the system pool rather than replacing it, matching how
+		// traefik's own serversTransport rootCAs behaves.
+		pool, err := x509.SystemCertPool()
+		if err != nil || pool == nil {
+			pool = x509.NewCertPool()
+		}
+		for i := range c.RootCAs {
+			pem, err := os.ReadFile(c.RootCAs[i])
+			if err != nil {
+				return nil, fmt.Errorf("tls: rootCAs[%d]: %w", i, err)
+			}
+			if !pool.AppendCertsFromPEM(pem) {
+				return nil, fmt.Errorf("tls: rootCAs[%d] (%s): no PEM certificates found", i, c.RootCAs[i])
+			}
+		}
+		out.RootCAs = pool
+	}
+
+	for i := range c.Certificates {
+		crt, err := tls.LoadX509KeyPair(c.Certificates[i].CertFile, c.Certificates[i].KeyFile)
+		if err != nil {
+			return nil, fmt.Errorf("tls: certificates[%d]: %w", i, err)
+		}
+		out.Certificates = append(out.Certificates, crt)
+	}
+
+	return out, nil
+}
+
+// serversTransportFor mirrors an endpoint's TLS block into the traefik
+// serversTransport that governs hop 2, so both hops are gated alike.
+func serversTransportFor(c *ClientTLS) *dynamic.ServersTransport {
+	out := &dynamic.ServersTransport{
+		ServerName:         c.ServerName,
+		InsecureSkipVerify: c.InsecureSkipVerify,
+		RootCAs:            c.RootCAs,
+	}
+	for i := range c.Certificates {
+		out.Certificates = append(out.Certificates, tlstypes.Certificate{
+			CertFile: c.Certificates[i].CertFile,
+			KeyFile:  c.Certificates[i].KeyFile,
+		})
+	}
+	return out
 }
 
 // Init must stay free of network I/O — see package comment.
@@ -182,8 +346,9 @@ func (p *Provider) Stop() error {
 // prior candidates' endpoint bugs lived) and emits the merged config.
 func (p *Provider) refresh(ctx context.Context, cfgChan chan<- json.Marshaler) {
 	merged := &dynamic.HTTPConfiguration{
-		Routers:  map[string]*dynamic.Router{},
-		Services: map[string]*dynamic.Service{},
+		Routers:           map[string]*dynamic.Router{},
+		Services:          map[string]*dynamic.Service{},
+		ServersTransports: map[string]*dynamic.ServersTransport{},
 	}
 
 	for i := range p.endpoints {
@@ -202,6 +367,9 @@ func (p *Provider) refresh(ctx context.Context, cfgChan chan<- json.Marshaler) {
 		}
 		for name, s := range cfg.Services {
 			merged.Services[name] = s
+		}
+		for name, st := range cfg.ServersTransports {
+			merged.ServersTransports[name] = st
 		}
 	}
 
@@ -227,7 +395,12 @@ func (p *Provider) fetchEndpoint(ctx context.Context, idx int) (*dynamic.HTTPCon
 		return nil, fmt.Errorf("build request: %w", err)
 	}
 
-	res, err := p.client.Do(req)
+	client, err := p.clientFor(idx)
+	if err != nil {
+		return nil, err
+	}
+
+	res, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("fetch: %w", err)
 	}
@@ -246,8 +419,9 @@ func (p *Provider) fetchEndpoint(ctx context.Context, idx int) (*dynamic.HTTPCon
 	}
 
 	out := &dynamic.HTTPConfiguration{
-		Routers:  map[string]*dynamic.Router{},
-		Services: map[string]*dynamic.Service{},
+		Routers:           map[string]*dynamic.Router{},
+		Services:          map[string]*dynamic.Service{},
+		ServersTransports: map[string]*dynamic.ServersTransport{},
 	}
 
 	serviceName := e.Name + "-leaf"
@@ -273,11 +447,22 @@ func (p *Provider) fetchEndpoint(ctx context.Context, idx int) (*dynamic.HTTPCon
 	}
 
 	if len(out.Routers) > 0 {
-		out.Services[serviceName] = &dynamic.Service{
-			LoadBalancer: &dynamic.ServersLoadBalancer{
-				Servers: []dynamic.Server{{URL: e.WebURL}},
-			},
+		lb := &dynamic.ServersLoadBalancer{
+			Servers: []dynamic.Server{{URL: e.WebURL}},
 		}
+		// An explicit serversTransport wins: it lets an operator hand hop 2
+		// to a transport this plugin does not model (SPIFFE, custom cipher
+		// suites, forwarding timeouts). Otherwise mirror the TLS block.
+		// Neither set leaves it empty — traefik's global default, as in v1.
+		switch {
+		case e.ServersTransport != "":
+			lb.ServersTransport = e.ServersTransport
+		case e.TLS != nil:
+			transportName := e.Name + "-transport"
+			out.ServersTransports[transportName] = serversTransportFor(e.TLS)
+			lb.ServersTransport = transportName
+		}
+		out.Services[serviceName] = &dynamic.Service{LoadBalancer: lb}
 	}
 
 	// Security-relevant: a routeMiddlewares key matching no live leaf

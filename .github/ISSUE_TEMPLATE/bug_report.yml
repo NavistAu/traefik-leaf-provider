@@ -1,0 +1,88 @@
+name: Bug report
+description: A route does not appear, does not route, or the provider misbehaves.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before you file: check the main instance's logs for lines that start
+        with `leaf-provider`. The provider reports endpoint failures and
+        unmatched `routeMiddlewares` keys there, and that line is usually the
+        answer.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did you expect, and what did you get instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Plugin configuration
+      description: >-
+        The `providers.plugin` block from the main instance. Remove secrets and
+        replace real host names if you must, but keep the structure intact.
+      render: yaml
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log lines
+      description: >-
+        Every `leaf-provider` line from the main instance, plus any Traefik
+        error around plugin load.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: rawdata
+    attributes:
+      label: Leaf rawdata (optional but usually decisive)
+      description: >-
+        Output of `curl -s http://<leaf>:8080/api/rawdata | jq '.routers | keys'`
+        for the affected endpoint. This shows the router base names the plugin
+        actually sees.
+      render: json
+
+  - type: input
+    id: traefik-version
+    attributes:
+      label: Traefik version
+      placeholder: "v3.7.0"
+    validations:
+      required: true
+
+  - type: input
+    id: plugin-version
+    attributes:
+      label: Plugin version
+      description: The tag, or the commit if you install from a branch.
+      placeholder: "v1.1.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install-method
+    attributes:
+      label: Install method
+      options:
+        - Local plugin (plugins-local mount)
+        - Plugin Catalog (experimental.plugins)
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: The main instance can reach the leaf's API URL and web URL.
+          required: true
+        - label: I searched the existing issues.
+          required: true
