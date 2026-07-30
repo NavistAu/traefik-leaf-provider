@@ -16,7 +16,7 @@ jobs:
     outputs:
       version: ${{ steps.parse.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Parse Go version from mise.toml
         id: parse
         run: echo "version=$(grep '^go' mise.toml | sed 's/.*"\(.*\)"/\1/')" >> "$GITHUB_OUTPUT"
@@ -26,8 +26,8 @@ jobs:
     needs: go-version
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version: ${{ needs.go-version.outputs.version }}
       - name: gofmt
@@ -46,8 +46,8 @@ jobs:
     needs: go-version
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version: ${{ needs.go-version.outputs.version }}
       # The Plugin Catalog and the local-plugin install path both load
@@ -64,8 +64,8 @@ jobs:
     needs: go-version
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version: ${{ needs.go-version.outputs.version }}
       # Catalog discovery fails silently-ish (a bot-filed issue, days later)
@@ -95,8 +95,8 @@ jobs:
     needs: go-version
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version: ${{ needs.go-version.outputs.version }}
       - name: go test
@@ -111,7 +111,7 @@ jobs:
     # actually counts; it must run on every PR, not only on main.
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Run E2E suite
         run: ./test/e2e/run.sh
       - name: Dump Traefik logs on failure
