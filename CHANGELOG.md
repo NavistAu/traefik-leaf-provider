@@ -11,7 +11,16 @@ control.
 
 ## [Unreleased]
 
-Nothing yet.
+### Changed
+
+- CI actions bumped to their current majors: `actions/checkout` v4 to v7,
+  `actions/setup-go` v5 to v7, `softprops/action-gh-release` v2 to v3. All three
+  move to the Node 24 runtime, clearing the Node 20 deprecation warnings every
+  run was emitting. The only breaking change among them — checkout's safer
+  `pull_request_target` defaults — does not apply, as no workflow here uses that
+  trigger.
+- Dependabot now groups GitHub Actions updates into one pull request. Separate
+  PRs all edit the same two workflow files and conflict with each other.
 
 ## [1.2.0] - 2026-07-30
 
